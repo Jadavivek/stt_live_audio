@@ -7,7 +7,7 @@ from st_audiorec import st_audiorec  # pip install streamlit-audiorec pydub
 # ---------------------------
 # API CONFIG
 # ---------------------------
-API_KEY = "YOUR_SARVAM_API_KEY"  # Replace with your Sarvam AI key
+API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"  # Replace with your Sarvam AI key
 ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
 TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
 
