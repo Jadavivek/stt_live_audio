@@ -1,52 +1,55 @@
 import streamlit as st
-import numpy as np
-import tempfile
 import requests
+import base64
+import tempfile
 import wave
-from audiorecorder import audiorecorder  # simple recorder widget
 
-# ==========================
-# CONFIG
-# ==========================
+st.title("🎤 Live Telugu Speech → English Translation")
+
 API_KEY = "YOUR_SARVAM_API_KEY"
 ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
 TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
 
-st.title("🎤 Telugu Speech → English Translation (Record Audio)")
+# --------------------------
+# Mic Recorder UI
+# --------------------------
+st.markdown(
+    """
+    <script src="https://cdn.jsdelivr.net/npm/streamlit-mic-recorder@0.1.0/dist/streamlit-mic-recorder.min.js"></script>
+    <mic-recorder id="recorder"></mic-recorder>
+    """,
+    unsafe_allow_html=True
+)
 
-# ==========================
-# RECORD AUDIO
-# ==========================
-audio = audiorecorder("🎙️ Start Recording", "⏹ Stop Recording")
+# Button to trigger recording
+if st.button("🎙️ Record & Upload"):
+    # JS sends base64 WAV string
+    wav_b64 = st.experimental_get_query_params().get("audio", [None])[0]
+    if wav_b64:
+        audio_bytes = base64.b64decode(wav_b64)
+        st.audio(audio_bytes, format="audio/wav")
 
-if len(audio) > 0:
-    st.audio(audio.tobytes(), format="audio/wav")
+        # Save WAV temporarily
+        wav_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+        with open(wav_path, "wb") as f:
+            f.write(audio_bytes)
 
-    # Save to temp WAV file
-    wav_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-    with wave.open(wav_path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(16000)
-        wf.writeframes(audio.tobytes())
-
-    # ==========================
-    # TRANSCRIBE (Telugu)
-    # ==========================
-    if st.button("📝 Transcribe & Translate"):
-        headers = {"Authorization": f"Bearer {API_KEY}"}
+        # --------------------------
+        # Transcribe Telugu
+        # --------------------------
         with open(wav_path, "rb") as f:
             files = {"audio": f}
-            data = {"model": "saarika"}  # Telugu STT model
+            data = {"model": "saarika"}  # Telugu model
+            headers = {"Authorization": f"Bearer {API_KEY}"}
             resp = requests.post(ASR_ENDPOINT, headers=headers, files=files, data=data)
 
         if resp.status_code == 200:
             telugu_text = resp.json().get("text", "")
-            st.write("📝 **Telugu Transcription:**", telugu_text)
+            st.write("📝 Telugu Transcription:", telugu_text)
 
-            # ==========================
-            # TRANSLATE (English)
-            # ==========================
+            # --------------------------
+            # Translate to English
+            # --------------------------
             trans_data = {
                 "model": "mayura",
                 "text": telugu_text,
@@ -57,8 +60,8 @@ if len(audio) > 0:
 
             if trans_resp.status_code == 200:
                 english_text = trans_resp.json().get("translation", "")
-                st.write("🌍 **English Translation:**", english_text)
+                st.write("🌍 English Translation:", english_text)
             else:
-                st.error("❌ Translation failed: " + trans_resp.text)
+                st.error("❌ Translation failed")
         else:
-            st.error("❌ Transcription failed: " + resp.text)
+            st.error("❌ Transcription failed")
