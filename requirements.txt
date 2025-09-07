@@ -1,3 +1,4 @@
 streamlit
 requests
 ffmpeg-python
+streamlit-audiorecorder
