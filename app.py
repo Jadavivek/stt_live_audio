@@ -1,67 +1,56 @@
 import streamlit as st
+import subprocess
+import os
+import tempfile
 import requests
-import io
-from pydub import AudioSegment 
-import pyaudioop as audioop
 
-from st_audiorec import st_audiorec  # pip install streamlit-audiorec pydub
+SARVAM_API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"  # Store in Streamlit secrets
 
-# ---------------------------
-# API CONFIG
-# ---------------------------
-API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"  # Replace with your Sarvam AI key
-ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
-TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
+def convert_to_wav(input_file, output_file):
+    """Convert any audio file to 16kHz mono WAV using ffmpeg."""
+    command = [
+        "ffmpeg",
+        "-y",  # overwrite output
+        "-i", input_file,
+        "-ar", "16000",  # sample rate
+        "-ac", "1",      # mono
+        output_file
+    ]
+    subprocess.run(command, check=True)
+    return output_file
 
-st.set_page_config(page_title="Telugu → English Transcriber", layout="centered")
-st.title("🎤 Telugu Speech → English Translation (Sarvam AI)")
+def transcribe_and_translate(audio_path):
+    """Send audio to Sarvam AI for Telugu → English transcription."""
+    url = "https://api.sarvam.ai/speech-to-text"  # adjust if different endpoint
+    headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
 
-# ---------------------------
-# AUDIO RECORDING
-# ---------------------------
-wav_audio_data = st_audiorec()
+    with open(audio_path, "rb") as f:
+        files = {"file": f}
+        data = {"source_language": "te", "target_language": "en"}
+        response = requests.post(url, headers=headers, files=files, data=data)
 
-if wav_audio_data is not None:
-    st.audio(wav_audio_data, format="audio/wav")
-    st.success("✅ Audio recorded!")
+    if response.status_code == 200:
+        return response.json().get("text", "No text found")
+    else:
+        return f"Error: {response.text}"
 
-    if st.button("Transcribe & Translate"):
-        try:
-            # Convert raw bytes into a WAV file
-            audio_bytes = io.BytesIO(wav_audio_data)
-            audio = AudioSegment.from_file(audio_bytes, format="wav")
+st.title("🎙️ Telugu → English Speech Transcription")
 
-            buf = io.BytesIO()
-            audio.export(buf, format="wav")
-            buf.seek(0)
+uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a"])
 
-            headers = {"Authorization": f"Bearer {API_KEY}"}
+if uploaded_file:
+    st.audio(uploaded_file)
 
-            # Step 1: Telugu ASR
-            resp1 = requests.post(
-                ASR_ENDPOINT,
-                headers=headers,
-                files={"audio": ("audio.wav", buf, "audio/wav")},
-                data={"model": "saarika"},  # Telugu model
-            )
-            resp1.raise_for_status()
-            telugu_text = resp1.json().get("text", "")
-            st.write("**📝 Telugu Transcription:**", telugu_text)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_in:
+            tmp_in.write(uploaded_file.read())
+            tmp_in.flush()
 
-            # Step 2: Translation Telugu → English
-            resp2 = requests.post(
-                TRANSLATE_ENDPOINT,
-                headers=headers,
-                json={
-                    "model": "mayura",
-                    "text": telugu_text,
-                    "source": "te-IN",
-                    "target": "en-IN",
-                },
-            )
-            resp2.raise_for_status()
-            translated = resp2.json().get("translation", "")
-            st.write("**🌍 English Translation:**", translated)
+            # Convert to WAV
+            convert_to_wav(tmp_in.name, tmp_wav.name)
 
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
+        # Transcribe
+        st.write("Transcribing with Sarvam AI...")
+        result = transcribe_and_translate(tmp_wav.name)
+        st.success("✅ Transcription complete:")
+        st.write(result)
