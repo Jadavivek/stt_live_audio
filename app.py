@@ -1,78 +1,67 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
-import numpy as np
-import requests
+import asyncio
+import base64
 import tempfile
+import numpy as np
 import ffmpeg
-from static_ffmpeg import add_paths
+import requests
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 
-# Ensure ffmpeg works in Streamlit Cloud
-add_paths()
+API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"
+STT_WS_URL = "wss://api.sarvam.ai/speech-to-text-stream"  # Placeholder
+TRANSLATE_WS_URL = "wss://api.sarvam.ai/speech-to-text-translate-stream"
 
-# Sarvam API config
-API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"   # 🔑 Replace with your API key
-ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
-TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
+st.title("🎙 Live Telugu → English Transcription")
 
-st.title("🎤 Live Telugu → English Speech Transcription")
-
-# --- Audio Processor ---
-class AudioProcessor(AudioProcessorBase):
+class Proc(AudioProcessorBase):
     def __init__(self):
-        self.chunks = []
+        self.buf = bytearray()
 
     def recv_audio(self, frame):
-        # Collect audio frames
-        data = frame.to_ndarray().flatten()
-        self.chunks.append(data)
+        self.buf.extend(frame.to_ndarray().flatten().tobytes())
         return frame
 
-# --- Start WebRTC mic stream ---
 webrtc_ctx = webrtc_streamer(
-    key="telugu-stt",
+    key="live-stream",
     mode=WebRtcMode.SENDONLY,
     media_stream_constraints={"audio": True, "video": False},
-    audio_receiver_size=256,
+    audio_receiver_size=1024,
     async_processing=True,
-    audio_processor_factory=AudioProcessor,
+    audio_processor_factory=Proc,
 )
 
-# --- Convert raw PCM to WAV ---
-def convert_to_wav(raw_audio, output_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".raw") as tmp_raw:
-        tmp_raw.write(raw_audio)
-        tmp_raw.flush()
-        (
-            ffmpeg
-            .input(tmp_raw.name, f="s16le", ar="48000", ac="1")
-            .output(output_file, ar=16000, ac=1)
-            .overwrite_output()
-            .run(quiet=True)
-        )
-    return output_file
+async def stream_audio_and_transcribe(bytes_audio):
+    import websockets, json
+    async with websockets.connect(STT_WS_URL, extra_headers={"Authorization": f"Bearer {API_KEY}"}) as ws:
+        await ws.send(json.dumps({"language_code": "te-IN", "model": "saarika:v2"}))
+        await ws.send(base64.b64encode(bytes_audio).decode())
+        response = await ws.recv()
+        return response
 
-# --- Main Logic ---
-if webrtc_ctx.audio_receiver and st.button("🎙️ Transcribe"):
-    # Join PCM chunks into bytes
-    audio_data = np.concatenate(webrtc_ctx.audio_processor.chunks).astype(np.int16).tobytes()
+if webrtc_ctx.audio_receiver and st.button("Start Live Transcription"):
+    audio_bytes = webrtc_ctx.audio_processor.buf
+    # Convert PCM to WAV
+    pcm_file = tempfile.NamedTemporaryFile(delete=False, suffix=".raw")
+    pcm_file.write(audio_bytes)
+    pcm_file.flush()
 
-    # Save as WAV
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav:
-        wav_path = tmp_wav.name
-    convert_to_wav(audio_data, wav_path)
-
-    # Step 1: Telugu Speech-to-Text
-    headers = {"Authorization": f"Bearer {API_KEY}"}
-    with open(wav_path, "rb") as f:
-        resp1 = requests.post(ASR_ENDPOINT, headers=headers, files={"audio": f}, data={"model": "saarika"})
-    telugu_text = resp1.json().get("text", "")
-    st.write("📝 **Telugu Transcription:**", telugu_text)
-
-    # Step 2: Translate Telugu → English
-    resp2 = requests.post(
-        TRANSLATE_ENDPOINT,
-        headers=headers,
-        json={"model": "mayura", "text": telugu_text, "source": "te-IN", "target": "en-IN"},
+    wav_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+    (
+        ffmpeg
+        .input(pcm_file.name, f="s16le", ar="48000", ac=1)
+        .output(wav_path, ar=16000, ac=1)
+        .overwrite_output()
+        .run(quiet=True)
     )
-    english_text = resp2.json().get("translation", "")
-    st.write("🌍 **English Translation:**", english_text)
+
+    async def run():
+        telugu_response = await stream_audio_and_transcribe(open(wav_path, "rb").read())
+        st.write("**Telugu Transcription:**", telugu_response)
+
+        async with websockets.connect(TRANSLATE_WS_URL, extra_headers={"Authorization": f"Bearer {API_KEY}"}) as ws:
+            await ws.send(json.dumps({"model": "saaras:v2", "language_code": "te-IN"}))
+            await ws.send(base64.b64encode(open(wav_path, "rb").read()).decode())
+            translation = await ws.recv()
+            st.write("**English Translation:**", translation)
+
+    asyncio.run(run())
