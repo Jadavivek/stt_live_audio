@@ -1,56 +1,51 @@
 import streamlit as st
-import subprocess
-import os
 import tempfile
+import subprocess
 import requests
+import os
+import time
 
-SARVAM_API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"  # Store in Streamlit secrets
+SARVAM_API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"
 
 def convert_to_wav(input_file, output_file):
-    """Convert any audio file to 16kHz mono WAV using ffmpeg."""
     command = [
-        "ffmpeg",
-        "-y",  # overwrite output
-        "-i", input_file,
-        "-ar", "16000",  # sample rate
-        "-ac", "1",      # mono
-        output_file
+        "ffmpeg", "-y", "-i", input_file,
+        "-ar", "16000", "-ac", "1", output_file
     ]
     subprocess.run(command, check=True)
     return output_file
 
 def transcribe_and_translate(audio_path):
-    """Send audio to Sarvam AI for Telugu → English transcription."""
-    url = "https://api.sarvam.ai/speech-to-text"  # adjust if different endpoint
+    url = "https://api.sarvam.ai/speech-to-text"  # check actual endpoint
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
-
     with open(audio_path, "rb") as f:
         files = {"file": f}
         data = {"source_language": "te", "target_language": "en"}
         response = requests.post(url, headers=headers, files=files, data=data)
 
     if response.status_code == 200:
-        return response.json().get("text", "No text found")
+        res = response.json()
+        return res.get("text", "No Telugu text"), res.get("translated_text", "No English translation")
     else:
-        return f"Error: {response.text}"
+        return None, f"Error: {response.text}"
 
-st.title("🎙️ Telugu → English Speech Transcription")
+st.title("🎙️ Live Telugu → English Transcription")
 
-uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a"])
+# Step 1: Record short audio clips
+audio_chunk = st.audio_input("🎤 Speak Telugu", key="mic")  # works in Streamlit 1.29+
 
-if uploaded_file:
-    st.audio(uploaded_file)
+if audio_chunk is not None:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_in:
+        tmp_in.write(audio_chunk.getbuffer())
+        tmp_in.flush()
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_in:
-            tmp_in.write(uploaded_file.read())
-            tmp_in.flush()
+        # Convert to WAV
+        tmp_wav = tmp_in.name.replace(".webm", ".wav")
+        convert_to_wav(tmp_in.name, tmp_wav)
 
-            # Convert to WAV
-            convert_to_wav(tmp_in.name, tmp_wav.name)
+        # Step 2: Transcribe + Translate
+        telugu_text, english_text = transcribe_and_translate(tmp_wav)
 
-        # Transcribe
-        st.write("Transcribing with Sarvam AI...")
-        result = transcribe_and_translate(tmp_wav.name)
-        st.success("✅ Transcription complete:")
-        st.write(result)
+        if telugu_text:
+            st.info(f"📝 Telugu: {telugu_text}")
+            st.success(f"🌍 English: {english_text}")
