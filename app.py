@@ -1,64 +1,49 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import requests
+import tempfile
 import numpy as np
 import soundfile as sf
-import tempfile
-import requests
+from streamlit_audio_recorder import st_audiorecorder  # pip install streamlit-audio-recorder
 
+# --------------------------
+# App Title
+# --------------------------
 st.title("🎤 Live Telugu Speech → English Translation")
 
-API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"
+# --------------------------
+# Sarvam API configuration
+# --------------------------
+API_KEY = "YOUR_SARVAM_API_KEY"
 ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
 TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 
 # --------------------------
-# Audio Processor
+# Audio Recorder UI
 # --------------------------
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.frames = []
+st.markdown("Click 'Start Recording' to record your speech.")
+audio_bytes = st_audiorecorder(key="recorder")
 
-    def recv_audio(self, frame):
-        self.frames.append(frame.to_ndarray())
-        return frame
+if audio_bytes:
+    # Show live audio playback
+    st.audio(audio_bytes, format="audio/wav")
 
-# --------------------------
-# Start WebRTC audio stream
-# --------------------------
-ctx = webrtc_streamer(
-    key="live-audio",
-    mode=WebRtcMode.SENDONLY,
-    media_stream_constraints={"audio": True, "video": False},
-    audio_receiver_size=1024,
-    async_processing=True,
-    audio_processor_factory=AudioProcessor
-)
-
-# --------------------------
-# Transcribe & Translate
-# --------------------------
-if ctx.audio_receiver and st.button("📝 Transcribe & Translate"):
-    # Merge audio frames
-    audio_data = np.concatenate(ctx.audio_processor.frames, axis=0)
-    
-    # Save to temporary WAV
+    # Save temporary WAV
     tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-    sf.write(tmp_wav, audio_data, 16000)  # 16 kHz mono
-
-    st.audio(tmp_wav, format="audio/wav")
+    with open(tmp_wav, "wb") as f:
+        f.write(audio_bytes)
 
     # --------------------------
     # Transcribe Telugu
     # --------------------------
     with open(tmp_wav, "rb") as f:
         files = {"audio": f}
-        data = {"model": "saarika"}  # Telugu model
-        headers = {"Authorization": f"Bearer {API_KEY}"}
-        resp = requests.post(ASR_ENDPOINT, headers=headers, files=files, data=data)
+        data = {"model": "saarika"}  # Telugu ASR model
+        resp = requests.post(ASR_ENDPOINT, headers=HEADERS, files=files, data=data)
 
     if resp.status_code == 200:
         telugu_text = resp.json().get("text", "")
-        st.write("📝 Telugu Transcription:", telugu_text)
+        st.markdown(f"**📝 Telugu Transcription:** {telugu_text}")
 
         # --------------------------
         # Translate to English
@@ -69,17 +54,24 @@ if ctx.audio_receiver and st.button("📝 Transcribe & Translate"):
             "source": "te-IN",
             "target": "en-IN",
         }
-        trans_resp = requests.post(TRANSLATE_ENDPOINT, headers=headers, json=trans_data)
+        trans_resp = requests.post(TRANSLATE_ENDPOINT, headers=HEADERS, json=trans_data)
 
         if trans_resp.status_code == 200:
             english_text = trans_resp.json().get("translation", "")
-            st.write("🌍 English Translation:", english_text)
+            st.markdown(f"**🌍 English Translation:** {english_text}")
         else:
             st.error("❌ Translation failed")
     else:
         st.error("❌ Transcription failed")
 
     # --------------------------
-    # Download option
+    # Download recorded audio
     # --------------------------
-    st.download_button("💾 Download WAV", data=open(tmp_wav, "rb"), file_name="recorded_audio.wav")
+    st.download_button(
+        label="💾 Download Recorded WAV",
+        data=open(tmp_wav, "rb"),
+        file_name="recorded_audio.wav",
+        mime="audio/wav",
+    )
+else:
+    st.info("🎙️ Press 'Start Recording' and speak to transcribe and translate.")
