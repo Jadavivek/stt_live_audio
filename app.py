@@ -1,51 +1,78 @@
 import streamlit as st
-import tempfile
-import subprocess
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import numpy as np
 import requests
-import os
-import time
+import tempfile
+import ffmpeg
+from static_ffmpeg import add_paths
 
-SARVAM_API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"
+# Ensure ffmpeg works in Streamlit Cloud
+add_paths()
 
-def convert_to_wav(input_file, output_file):
-    command = [
-        "ffmpeg", "-y", "-i", input_file,
-        "-ar", "16000", "-ac", "1", output_file
-    ]
-    subprocess.run(command, check=True)
+# Sarvam API config
+API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"   # 🔑 Replace with your API key
+ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
+TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
+
+st.title("🎤 Live Telugu → English Speech Transcription")
+
+# --- Audio Processor ---
+class AudioProcessor(AudioProcessorBase):
+    def __init__(self):
+        self.chunks = []
+
+    def recv_audio(self, frame):
+        # Collect audio frames
+        data = frame.to_ndarray().flatten()
+        self.chunks.append(data)
+        return frame
+
+# --- Start WebRTC mic stream ---
+webrtc_ctx = webrtc_streamer(
+    key="telugu-stt",
+    mode=WebRtcMode.SENDONLY,
+    media_stream_constraints={"audio": True, "video": False},
+    audio_receiver_size=256,
+    async_processing=True,
+    audio_processor_factory=AudioProcessor,
+)
+
+# --- Convert raw PCM to WAV ---
+def convert_to_wav(raw_audio, output_file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".raw") as tmp_raw:
+        tmp_raw.write(raw_audio)
+        tmp_raw.flush()
+        (
+            ffmpeg
+            .input(tmp_raw.name, f="s16le", ar="48000", ac="1")
+            .output(output_file, ar=16000, ac=1)
+            .overwrite_output()
+            .run(quiet=True)
+        )
     return output_file
 
-def transcribe_and_translate(audio_path):
-    url = "https://api.sarvam.ai/speech-to-text"  # check actual endpoint
-    headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
-    with open(audio_path, "rb") as f:
-        files = {"file": f}
-        data = {"source_language": "te", "target_language": "en"}
-        response = requests.post(url, headers=headers, files=files, data=data)
+# --- Main Logic ---
+if webrtc_ctx.audio_receiver and st.button("🎙️ Transcribe"):
+    # Join PCM chunks into bytes
+    audio_data = np.concatenate(webrtc_ctx.audio_processor.chunks).astype(np.int16).tobytes()
 
-    if response.status_code == 200:
-        res = response.json()
-        return res.get("text", "No Telugu text"), res.get("translated_text", "No English translation")
-    else:
-        return None, f"Error: {response.text}"
+    # Save as WAV
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav:
+        wav_path = tmp_wav.name
+    convert_to_wav(audio_data, wav_path)
 
-st.title("🎙️ Live Telugu → English Transcription")
+    # Step 1: Telugu Speech-to-Text
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    with open(wav_path, "rb") as f:
+        resp1 = requests.post(ASR_ENDPOINT, headers=headers, files={"audio": f}, data={"model": "saarika"})
+    telugu_text = resp1.json().get("text", "")
+    st.write("📝 **Telugu Transcription:**", telugu_text)
 
-# Step 1: Record short audio clips
-audio_chunk = st.audio_input("🎤 Speak Telugu", key="mic")  # works in Streamlit 1.29+
-
-if audio_chunk is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_in:
-        tmp_in.write(audio_chunk.getbuffer())
-        tmp_in.flush()
-
-        # Convert to WAV
-        tmp_wav = tmp_in.name.replace(".webm", ".wav")
-        convert_to_wav(tmp_in.name, tmp_wav)
-
-        # Step 2: Transcribe + Translate
-        telugu_text, english_text = transcribe_and_translate(tmp_wav)
-
-        if telugu_text:
-            st.info(f"📝 Telugu: {telugu_text}")
-            st.success(f"🌍 English: {english_text}")
+    # Step 2: Translate Telugu → English
+    resp2 = requests.post(
+        TRANSLATE_ENDPOINT,
+        headers=headers,
+        json={"model": "mayura", "text": telugu_text, "source": "te-IN", "target": "en-IN"},
+    )
+    english_text = resp2.json().get("translation", "")
+    st.write("🌍 **English Translation:**", english_text)
