@@ -1,79 +1,80 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
-import numpy as np
-import tempfile
 import requests
-import soundfile as sf
+import io
+from pydub import AudioSegment
+from pydub.utils import which
+from st_audiorec import st_audiorec  # pip install streamlit-audiorec pydub
 
-st.title("🎤 Live Telugu Speech → English Translation")
+# ---------------------------
+# Configure FFmpeg for pydub
+# ---------------------------
+AudioSegment.converter = which("ffmpeg")  # Ensure ffmpeg is in PATH
 
-API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"
+# ---------------------------
+# API CONFIG
+# ---------------------------
+API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"  # Replace with your Sarvam API key
 ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
 TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
-HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 
+# ---------------------------
+# Streamlit Page Config
+# ---------------------------
+st.set_page_config(page_title="Telugu → English Transcriber", layout="centered")
+st.title("🎤 Telugu Speech → English Translation (Sarvam AI)")
+st.write("Record your voice, transcribe to Telugu, and translate to English!")
 
-class AudioRecorder(AudioProcessorBase):
-    def __init__(self):
-        self.frames = []
+# ---------------------------
+# Audio Recorder UI
+# ---------------------------
+wav_audio_data = st_audiorec()  # Browser recording
 
-    def recv(self, frame):
-        audio = frame.to_ndarray()
-        self.frames.append(audio)
-        return frame
+if wav_audio_data is not None:
+    st.audio(wav_audio_data, format="audio/wav")
+    st.success("✅ Audio recorded!")
 
+    if st.button("Transcribe & Translate"):
+        try:
+            # Convert raw bytes to WAV via pydub
+            audio_bytes = io.BytesIO(wav_audio_data)
+            audio = AudioSegment.from_file(audio_bytes, format="wav")
+            buf = io.BytesIO()
+            audio.export(buf, format="wav")
+            buf.seek(0)
 
-ctx = webrtc_streamer(
-    key="example",
-    mode=WebRtcMode.SENDONLY,
-    audio_receiver_size=1024,
-    media_stream_constraints={"audio": True, "video": False},
-    audio_processor_factory=AudioRecorder,
-)
+            headers = {"Authorization": f"Bearer {API_KEY}"}
 
-if ctx.audio_processor and st.button("🛑 Stop & Process Recording"):
-    if ctx.audio_processor.frames:
-        audio_data = np.concatenate(ctx.audio_processor.frames, axis=0)
-        tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-        sf.write(tmp_wav, audio_data, 16000)
+            # Step 1: Transcribe Telugu audio
+            resp1 = requests.post(
+                ASR_ENDPOINT,
+                headers=headers,
+                files={"audio": ("audio.wav", buf, "audio/wav")},
+                data={"model": "saarika"},  # Telugu ASR model
+            )
+            resp1.raise_for_status()
+            telugu_text = resp1.json().get("text", "")
+            st.write("**📝 Telugu Transcription:**", telugu_text)
 
-        st.audio(tmp_wav, format="audio/wav")
+            # Step 2: Translate Telugu → English
+            resp2 = requests.post(
+                TRANSLATE_ENDPOINT,
+                headers=headers,
+                json={
+                    "model": "mayura",
+                    "text": telugu_text,
+                    "source": "te-IN",
+                    "target": "en-IN",
+                },
+            )
+            resp2.raise_for_status()
+            translated = resp2.json().get("translation", "")
+            st.write("**🌍 English Translation:**", translated)
 
-        # --------------------------
-        # Transcribe Telugu
-        # --------------------------
-        with open(tmp_wav, "rb") as f:
-            files = {"audio": f}
-            data = {"model": "saarika"}  # Telugu ASR model
-            resp = requests.post(ASR_ENDPOINT, headers=HEADERS, files=files, data=data)
-
-        if resp.status_code == 200:
-            telugu_text = resp.json().get("text", "")
-            st.markdown(f"**📝 Telugu Transcription:** {telugu_text}")
-
-            # --------------------------
-            # Translate to English
-            # --------------------------
-            trans_data = {
-                "model": "mayura",
-                "text": telugu_text,
-                "source": "te-IN",
-                "target": "en-IN",
-            }
-            trans_resp = requests.post(TRANSLATE_ENDPOINT, headers=HEADERS, json=trans_data)
-
-            if trans_resp.status_code == 200:
-                english_text = trans_resp.json().get("translation", "")
-                st.markdown(f"**🌍 English Translation:** {english_text}")
-            else:
-                st.error("❌ Translation failed")
-        else:
-            st.error("❌ Transcription failed")
-
-        # Download button
-        st.download_button(
-            "💾 Download Recorded WAV",
-            data=open(tmp_wav, "rb"),
-            file_name="recorded_audio.wav",
-            mime="audio/wav",
-        )
+        except requests.exceptions.HTTPError as errh:
+            st.error(f"❌ HTTP Error: {errh}")
+        except requests.exceptions.ConnectionError as errc:
+            st.error(f"❌ Connection Error: {errc}")
+        except requests.exceptions.Timeout as errt:
+            st.error(f"❌ Timeout Error: {errt}")
+        except requests.exceptions.RequestException as err:
+            st.error(f"❌ Error: {err}")
