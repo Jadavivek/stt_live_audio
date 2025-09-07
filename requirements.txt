@@ -1,7 +1,3 @@
 streamlit
-streamlit-webrtc
 requests
 ffmpeg-python
-imageio-ffmpeg
-static-ffmpeg
-numpy
