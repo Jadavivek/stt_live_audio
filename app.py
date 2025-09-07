@@ -1,7 +1,9 @@
 import streamlit as st
 import requests
 import io
-from pydub import AudioSegment
+from pydub import AudioSegment 
+import pyaudioop as audioop
+
 from st_audiorec import st_audiorec  # pip install streamlit-audiorec pydub
 
 # ---------------------------
