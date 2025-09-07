@@ -6,7 +6,7 @@ import wave
 
 st.title("🎤 Live Telugu Speech → English Translation")
 
-API_KEY = "YOUR_SARVAM_API_KEY"
+API_KEY = "sk_2e681bna_IQkRnfFTXLYEpyj39shqTNlX"
 ASR_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
 TRANSLATE_ENDPOINT = "https://api.sarvam.ai/translate"
 
