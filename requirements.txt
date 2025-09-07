@@ -1,3 +1,8 @@
 streamlit
 requests
 numpy
+streamlit>=1.49.1
+streamlit-webrtc>=0.57.0
+numpy
+soundfile
+requests
